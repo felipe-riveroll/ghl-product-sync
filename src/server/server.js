@@ -31,39 +31,13 @@ if (!GHL_LOCATION_ID) {
 console.log('GHL API Token:', GHL_API_TOKEN ? 'Configured' : 'Missing');
 console.log('GHL Location ID:', GHL_LOCATION_ID || 'Missing');
 
-// Helper function to generate product placeholder images
-function generateProductPlaceholder(productName, productId) {
-  // Clean product name for URL
-  const cleanName = (productName || 'Producto').substring(0, 20);
-  const encodedName = encodeURIComponent(cleanName);
-  
-  // Generate consistent color based on product ID
-  const colors = [
-    { bg: 'e2e8f0', text: '64748b' }, // slate
-    { bg: 'f1f5f9', text: '475569' }, // slate light
-    { bg: 'f8fafc', text: '334155' }, // slate lighter
-    { bg: 'ecfccb', text: '365314' }, // lime
-    { bg: 'dcfce7', text: '166534' }, // green
-    { bg: 'dbeafe', text: '1e40af' }, // blue
-    { bg: 'e0e7ff', text: '3730a3' }, // indigo
-    { bg: 'f3e8ff', text: '6b21a8' }, // violet
-  ];
-  
-  // Simple hash function to get consistent color
-  let hash = 0;
-  for (let i = 0; i < productId.length; i++) {
-    hash = ((hash << 5) - hash + productId.charCodeAt(i)) & 0xffffffff;
-  }
-  const colorIndex = Math.abs(hash) % colors.length;
-  const { bg, text } = colors[colorIndex];
-  
-  return `https://via.placeholder.com/400x400/${bg}/${text}?text=${encodedName}`;
-}
 
 // Helper function to make GHL API calls
 async function ghlApiCall(endpoint, options = {}) {
   const url = `${GHL_BASE_URL}${endpoint}`;
-  
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30-second timeout
+
   const defaultHeaders = {
     'Authorization': `Bearer ${GHL_API_TOKEN}`,
     'Content-Type': 'application/json',
@@ -71,12 +45,12 @@ async function ghlApiCall(endpoint, options = {}) {
   };
 
   const config = {
-    headers: defaultHeaders,
     ...options,
+    headers: { ...defaultHeaders, ...options.headers },
+    signal: controller.signal,
   };
 
   console.log(`Making GHL API call to: ${endpoint}`);
-  console.log(`Headers:`, JSON.stringify(defaultHeaders, null, 2));
   
   try {
     const response = await fetch(url, config);
@@ -87,13 +61,72 @@ async function ghlApiCall(endpoint, options = {}) {
       throw new Error(`GHL API Error: ${response.status} - ${errorText}`);
     }
 
-    const data = await response.json();
-    console.log(`GHL API Response for ${endpoint}:`, JSON.stringify(data, null, 2));
+    // Check for empty response body
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+
     return data;
   } catch (error) {
+    if (error.name === 'AbortError') {
+      console.error('GHL API Call timed out.');
+      throw new Error('Request to GHL API timed out.');
+    }
     console.error('GHL API Call failed:', error);
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
+}
+
+// Helper function to fetch ALL products from GHL, handling pagination manually
+async function getAllGhlProducts() {
+  let allProducts = [];
+  const limit = 100;
+  let offset = 0;
+  let total = 0;
+
+  // First call to get the total number of products
+  try {
+    console.log(`Fetching initial product batch to get total...`);
+    const initialResponse = await ghlApiCall(`/products/?locationId=${GHL_LOCATION_ID}&limit=${limit}&offset=${offset}`);
+    const initialProducts = initialResponse.products || [];
+    allProducts = allProducts.concat(initialProducts);
+
+    // GHL API returns total in a nested array for some reason
+    total = initialResponse.total?.[0]?.total ?? 0;
+
+    if (total === 0 && initialProducts.length > 0) {
+        // Fallback if total is not returned as expected
+        total = initialProducts.length;
+        console.warn("Total not found in initial response, proceeding with fetched count.");
+    }
+
+    console.log(`Total products reported by API: ${total}`);
+
+    offset += initialProducts.length;
+
+    // Fetch remaining pages
+    while (offset < total) {
+      console.log(`Fetching products... Offset: ${offset}, Limit: ${limit}`);
+      const response = await ghlApiCall(`/products/?locationId=${GHL_LOCATION_ID}&limit=${limit}&offset=${offset}`);
+      const products = response.products || [];
+
+      if (products.length === 0) {
+        // No more products to fetch, break the loop
+        break;
+      }
+
+      allProducts = allProducts.concat(products);
+      offset += products.length;
+    }
+
+  } catch (error) {
+    console.error('Error during manual pagination for products:', error);
+    // Return whatever was fetched before the error
+  }
+
+  console.log(`Successfully fetched a total of ${allProducts.length} products from GHL.`);
+  return allProducts;
 }
 
 // Routes
@@ -106,6 +139,9 @@ app.get('/api/products', async (req, res) => {
     const pageParam = Array.isArray(req.query.page) ? req.query.page[0] : req.query.page;
     const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
 
+    // Filter parameters
+    const { search, minPrice, maxPrice, minQuantity, maxQuantity } = req.query;
+
     const page = Number.parseInt(pageParam ?? '1', 10);
     const limit = Number.parseInt(limitParam ?? '20', 10);
 
@@ -113,56 +149,79 @@ app.get('/api/products', async (req, res) => {
     const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 300) : 20;
     const offset = (safePage - 1) * safeLimit;
 
-    // Get products from GoHighLevel API with locationId parameter
-    const productsResponse = await ghlApiCall(`/products/?locationId=${GHL_LOCATION_ID}`);
-    const allProducts = productsResponse.products || [];
+    // 1. Get ALL products from GoHighLevel
+    const allProducts = await getAllGhlProducts();
 
-    // For each product, get pricing information
-    const productsWithPricing = await Promise.all(
-      allProducts.map(async (product) => {
-        try {
-          // Get prices for this product
-          const pricesResponse = await ghlApiCall(`/products/${product._id}/price/?locationId=${GHL_LOCATION_ID}`);
-          const prices = pricesResponse.prices || [];
-          
-          // Get the first price (or default values)
-          const firstPrice = prices.length > 0 ? prices[0] : null;
-          
-          return {
-            id: product._id,
-            name: product.name,
-            description: product.description || '',
-            category: product.productType || 'General',
-            price: firstPrice ? (firstPrice.amount / 100) : 0, // Convert from cents to pesos
-            priceId: firstPrice ? firstPrice._id : null,
-            currency: firstPrice ? firstPrice.currency : 'MXN',
-            quantity: firstPrice ? (firstPrice.availableQuantity || 0) : 0,
-            trackInventory: firstPrice ? (firstPrice.trackInventory || false) : false,
-            image: product.image || generateProductPlaceholder(product.name, product._id)
-          };
-        } catch (error) {
-          console.error(`Error fetching prices for product ${product._id}:`, error);
-          return {
-            id: product._id,
-            name: product.name,
-            description: product.description || '',
-            category: product.productType || 'General',
-            price: 0,
-            priceId: null,
-            currency: 'MXN',
-            quantity: 0,
-            trackInventory: false,
-            image: product.image || generateProductPlaceholder(product.name, product._id)
-          };
-        }
-      })
-    );
+    // 2. Fetch prices sequentially with a delay to guarantee we don't hit rate limits.
+    const productsWithPricing = [];
+    for (const product of allProducts) {
+      try {
+        // Add a delay to avoid rate-limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
 
-  const total = productsWithPricing.length;
-  const paginatedProducts = productsWithPricing.slice(offset, offset + safeLimit);
+        const pricesResponse = await ghlApiCall(`/products/${product._id}/price/?locationId=${GHL_LOCATION_ID}`);
+        const prices = pricesResponse.prices || [];
+        const firstPrice = prices.length > 0 ? prices[0] : null;
+
+        productsWithPricing.push({
+          id: product._id,
+          name: product.name,
+          description: product.description || '',
+          category: product.productType || 'General',
+          price: firstPrice ? (firstPrice.amount / 100) : 0,
+          priceId: firstPrice ? firstPrice._id : null,
+          currency: firstPrice ? firstPrice.currency : 'MXN',
+          quantity: firstPrice ? (firstPrice.availableQuantity || 0) : 0,
+          trackInventory: firstPrice ? (firstPrice.trackInventory || false) : false,
+          image: product.image || null
+        });
+      } catch (error) {
+        console.error(`Error fetching price for product ${product._id}:`, error.message);
+        productsWithPricing.push({
+          id: product._id, name: product.name, description: product.description || '',
+          category: product.productType || 'General', price: 0, priceId: null,
+          currency: 'MXN', quantity: 0, trackInventory: false, image: product.image || null
+        });
+      }
+    }
+
+    // Apply filters
+    let filteredProducts = productsWithPricing;
+
+    // 1. Filter by search term (name)
+    if (search && typeof search === 'string') {
+      filteredProducts = filteredProducts.filter(p =>
+        p.name.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+
+    // 2. Filter by price range
+    const numMinPrice = minPrice ? parseFloat(minPrice) : null;
+    const numMaxPrice = maxPrice ? parseFloat(maxPrice) : null;
+    if (numMinPrice !== null) {
+      filteredProducts = filteredProducts.filter(p => p.price >= numMinPrice);
+    }
+    if (numMaxPrice !== null) {
+      filteredProducts = filteredProducts.filter(p => p.price <= numMaxPrice);
+    }
+
+    // 3. Filter by quantity range
+    const numMinQuantity = minQuantity ? parseInt(minQuantity, 10) : null;
+    const numMaxQuantity = maxQuantity ? parseInt(maxQuantity, 10) : null;
+    if (numMinQuantity !== null) {
+      filteredProducts = filteredProducts.filter(p => p.quantity >= numMinQuantity);
+    }
+    if (numMaxQuantity !== null) {
+      filteredProducts = filteredProducts.filter(p => p.quantity <= numMaxQuantity);
+    }
+
+  const total = filteredProducts.length;
+  const paginatedProducts = filteredProducts.slice(offset, offset + safeLimit);
   const totalPages = total > 0 ? Math.ceil(total / safeLimit) : 1;
     const hasNext = offset + paginatedProducts.length < total;
 
+    // The summary should reflect ALL products, not just the filtered ones.
+    // This provides a consistent overview of the entire inventory.
     const summary = productsWithPricing.reduce(
       (acc, product) => {
         const value = (product.price || 0) * (product.quantity || 0);
