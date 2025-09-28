@@ -52,16 +52,35 @@ const buildSummary = (products: Product[], overrides?: Partial<ProductsSummary>)
 };
 
 export const productService = {
-  // GET /products - Fetch all products with pagination
+  // GET /products - Fetch all products with pagination and filtering
   async getProducts(
     page: number = 1,
-    limit: number = 20
+    limit: number = 20,
+    filters: {
+      search?: string;
+      minPrice?: number | string;
+      maxPrice?: number | string;
+      minQuantity?: number | string;
+      maxQuantity?: number | string;
+    } = {}
   ): Promise<
     ApiResponse<{ products: Product[]; pagination: PaginationInfo; summary: ProductsSummary }>
   > {
     try {
-      const response = await fetch(`${API_BASE_URL}/products?page=${page}&limit=${limit}`);
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+      });
+
+      // Append filter parameters if they are provided and not empty
+      if (filters.search) params.append('search', filters.search);
+      if (filters.minPrice) params.append('minPrice', String(filters.minPrice));
+      if (filters.maxPrice) params.append('maxPrice', String(filters.maxPrice));
+      if (filters.minQuantity) params.append('minQuantity', String(filters.minQuantity));
+      if (filters.maxQuantity) params.append('maxQuantity', String(filters.maxQuantity));
       
+      const response = await fetch(`${API_BASE_URL}/products?${params.toString()}`);
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
