@@ -1,124 +1,207 @@
-import { Product, ProductUpdateRequest, InventoryUpdateRequest, ApiResponse } from '@/types/product';
+import {
+  Product,
+  ProductUpdateRequest,
+  InventoryUpdateRequest,
+  ApiResponse,
+  PaginationInfo,
+  ProductsSummary,
+} from '@/types/product';
 
-// Simulated data - replace with real GoHighLevel API calls
-const mockProducts: Product[] = [
-  {
-    id: '1',
-    name: 'Producto Premium A',
-    price: 299.99,
-    quantity: 15,
-    image: 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=400&h=400&fit=crop&crop=center',
-    priceId: 'price_1'
-  },
-  {
-    id: '2',
-    name: 'Producto Estándar B',
-    price: 149.99,
-    quantity: 32,
-    image: 'https://images.unsplash.com/photo-1560472354-b33ff0c44a43?w=400&h=400&fit=crop&crop=center',
-    priceId: 'price_2'
-  },
-  {
-    id: '3',
-    name: 'Producto Básico C',
-    price: 79.99,
-    quantity: 8,
-    image: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400&h=400&fit=crop&crop=center',
-    priceId: 'price_3'
-  },
-  {
-    id: '4',
-    name: 'Producto Deluxe D',
-    price: 449.99,
-    quantity: 5,
-    image: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400&h=400&fit=crop&crop=center',
-    priceId: 'price_4'
-  }
-];
+// API base URL for the backend server
+const API_BASE_URL = 'http://localhost:3001/api';
 
-// Simulate API delay
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const toMaybeNumber = (value: unknown): number | undefined => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
+};
+
+const buildPagination = (
+  overrides: Partial<PaginationInfo>,
+  fallback: { page: number; limit: number; total: number }
+): PaginationInfo => {
+  const computedTotalPages =
+    overrides.totalPages ??
+    (fallback.total > 0 ? Math.ceil(fallback.total / fallback.limit) : 1);
+
+  const totalPages = Math.max(1, computedTotalPages);
+
+  return {
+    page: overrides.page ?? fallback.page,
+    limit: overrides.limit ?? fallback.limit,
+    total: overrides.total ?? fallback.total,
+    totalPages,
+    hasNext:
+      overrides.hasNext ??
+      (totalPages > 0 ? (overrides.page ?? fallback.page) < totalPages : false),
+    hasPrevious: overrides.hasPrevious ?? (overrides.page ?? fallback.page) > 1,
+  };
+};
+
+const buildSummary = (products: Product[], overrides?: Partial<ProductsSummary>): ProductsSummary => {
+  const fallbackSummary: ProductsSummary = {
+    totalProducts: products.length,
+    totalValue: products.reduce((sum, item) => sum + (item.price ?? 0) * (item.quantity ?? 0), 0),
+    totalStock: products.reduce((sum, item) => sum + (item.quantity ?? 0), 0),
+  };
+
+  return {
+    totalProducts: overrides?.totalProducts ?? fallbackSummary.totalProducts,
+    totalValue: overrides?.totalValue ?? fallbackSummary.totalValue,
+    totalStock: overrides?.totalStock ?? fallbackSummary.totalStock,
+  };
+};
 
 export const productService = {
-  // GET /products - Fetch all products
-  async getProducts(): Promise<ApiResponse<Product[]>> {
-    await delay(800); // Simulate network delay
-    
+  // GET /products - Fetch all products with pagination
+  async getProducts(
+    page: number = 1,
+    limit: number = 20
+  ): Promise<
+    ApiResponse<{ products: Product[]; pagination: PaginationInfo; summary: ProductsSummary }>
+  > {
     try {
-      // Here you would integrate with @gohighlevel/api-client
-      // const client = new GHLClient({ accessToken: process.env.GHL_ACCESS_TOKEN });
-      // const products = await client.products.list();
+      const response = await fetch(`${API_BASE_URL}/products?page=${page}&limit=${limit}`);
       
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+
+      const products: Product[] = Array.isArray(data?.products)
+        ? data.products
+        : Array.isArray(data)
+          ? data
+          : [];
+
+      const pagination = buildPagination(
+        {
+          page: toMaybeNumber(data?.pagination?.page),
+          limit: toMaybeNumber(data?.pagination?.limit),
+          total: toMaybeNumber(data?.pagination?.total),
+          totalPages: toMaybeNumber(data?.pagination?.totalPages),
+          hasNext: typeof data?.pagination?.hasNext === 'boolean' ? data.pagination.hasNext : undefined,
+          hasPrevious:
+            typeof data?.pagination?.hasPrevious === 'boolean'
+              ? data.pagination.hasPrevious
+              : undefined,
+        },
+        {
+          page,
+          limit,
+          total: Array.isArray(data?.products)
+            ? toMaybeNumber(data?.pagination?.total) ?? products.length
+            : products.length,
+        }
+      );
+      
+      const summary = buildSummary(products, {
+        totalProducts: toMaybeNumber(data?.summary?.totalProducts),
+        totalValue: toMaybeNumber(data?.summary?.totalValue),
+        totalStock: toMaybeNumber(data?.summary?.totalStock),
+      });
+
       return {
         success: true,
-        data: mockProducts,
+        data: { products, pagination, summary },
         message: 'Products loaded successfully'
       };
     } catch (error) {
+      console.error('Error fetching products:', error);
       return {
         success: false,
-        data: [],
-        message: 'Error loading products'
+        data: {
+          products: [],
+          pagination: buildPagination({}, { page, limit, total: 0 }),
+          summary: {
+            totalProducts: 0,
+            totalValue: 0,
+            totalStock: 0,
+          },
+        },
+        message: `Error loading products: ${error instanceof Error ? error.message : 'Unknown error'}`
       };
     }
   },
 
   // PUT /products/:productId/price/:priceId - Update product price
   async updateProductPrice({ productId, priceId, price }: ProductUpdateRequest): Promise<ApiResponse<Product>> {
-    await delay(500);
-    
     try {
-      // Here you would call the real API
-      // const client = new GHLClient({ accessToken: process.env.GHL_ACCESS_TOKEN });
-      // const result = await client.products.updatePrice(productId, priceId, { price });
+      const response = await fetch(`${API_BASE_URL}/products/${productId}/price/${priceId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ price }),
+      });
       
-      const productIndex = mockProducts.findIndex(p => p.id === productId);
-      if (productIndex === -1) {
-        throw new Error('Product not found');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      mockProducts[productIndex].price = price;
+      const result = await response.json();
       
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to update price');
+      }
+      
+      // Return a minimal product object with updated price
+      // In a real scenario, you might want to fetch the full product data
       return {
         success: true,
-        data: mockProducts[productIndex],
+        data: {
+          id: productId,
+          priceId: result.priceId,
+          price: result.price,
+        } as Product,
         message: 'Price updated successfully'
       };
     } catch (error) {
+      console.error('Error updating price:', error);
       return {
         success: false,
         data: {} as Product,
-        message: 'Error updating price'
+        message: `Error updating price: ${error instanceof Error ? error.message : 'Unknown error'}`
       };
     }
   },
 
   // POST /products/inventory - Update product inventory
   async updateInventory({ productId, quantity }: InventoryUpdateRequest): Promise<ApiResponse<Product>> {
-    await delay(500);
-    
     try {
-      // Here you would call the real API
-      // const client = new GHLClient({ accessToken: process.env.GHL_ACCESS_TOKEN });
-      // const result = await client.products.updateInventory({ productId, quantity });
+      const response = await fetch(`${API_BASE_URL}/products/inventory`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ productId, quantity }),
+      });
       
-      const productIndex = mockProducts.findIndex(p => p.id === productId);
-      if (productIndex === -1) {
-        throw new Error('Product not found');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      mockProducts[productIndex].quantity = quantity;
+      const result = await response.json();
       
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to update inventory');
+      }
+      
+      // Return a minimal product object with updated quantity
       return {
         success: true,
-        data: mockProducts[productIndex],
+        data: {
+          id: result.productId,
+          quantity: result.quantity,
+        } as Product,
         message: 'Inventory updated successfully'
       };
     } catch (error) {
+      console.error('Error updating inventory:', error);
       return {
         success: false,
         data: {} as Product,
-        message: 'Error updating inventory'
+        message: `Error updating inventory: ${error instanceof Error ? error.message : 'Unknown error'}`
       };
     }
   }

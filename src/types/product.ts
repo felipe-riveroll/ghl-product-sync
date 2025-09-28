@@ -3,8 +3,12 @@ export interface Product {
   name: string;
   price: number;
   quantity: number;
-  image: string;
+  image?: string; // Made optional since backend doesn't provide this
   priceId: string;
+  description?: string;
+  category?: string;
+  currency?: string;
+  trackInventory?: boolean;
 }
 
 export interface ProductUpdateRequest {
@@ -16,6 +20,21 @@ export interface ProductUpdateRequest {
 export interface InventoryUpdateRequest {
   productId: string;
   quantity: number;
+}
+
+export interface PaginationInfo {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrevious: boolean;
+}
+
+export interface ProductsSummary {
+  totalProducts: number;
+  totalValue: number;
+  totalStock: number;
 }
 
 export interface ApiResponse<T> {

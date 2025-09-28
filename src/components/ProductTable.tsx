@@ -13,17 +13,17 @@ interface EditingCell {
   value: string;
 }
 
-export const ProductTable: React.FC = () => {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
+interface ProductTableProps {
+  products: Product[];
+  isLoading: boolean;
+  onProductsChange: (products: Product[]) => void;
+}
+
+export const ProductTable: React.FC<ProductTableProps> = ({ products, isLoading, onProductsChange }) => {
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
   const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    loadProducts();
-  }, []);
 
   useEffect(() => {
     if (editingCell && inputRef.current) {
@@ -31,26 +31,6 @@ export const ProductTable: React.FC = () => {
       inputRef.current.select();
     }
   }, [editingCell]);
-
-  const loadProducts = async () => {
-    setLoading(true);
-    const response = await productService.getProducts();
-    
-    if (response.success) {
-      setProducts(response.data);
-      toast({
-        title: "Productos cargados",
-        description: response.message,
-      });
-    } else {
-      toast({
-        title: "Error",
-        description: response.message,
-        variant: "destructive",
-      });
-    }
-    setLoading(false);
-  };
 
   const handleDoubleClick = (productId: string, field: 'price' | 'quantity', currentValue: number) => {
     setEditingCell({
@@ -97,8 +77,10 @@ export const ProductTable: React.FC = () => {
 
     try {
       if (field === 'price') {
-        const product = products.find(p => p.id === productId);
-        if (!product) return;
+        const product = products.find((p) => p.id === productId);
+        if (!product) {
+          throw new Error('Producto no encontrado');
+        }
         
         response = await productService.updateProductPrice({
           productId,
@@ -113,9 +95,28 @@ export const ProductTable: React.FC = () => {
       }
 
       if (response.success) {
-        setProducts(prev => prev.map(p => 
-          p.id === productId ? response.data : p
-        ));
+        const updatedProduct = products.map((p) => {
+          if (p.id !== productId) return p;
+
+          const updatedPrice =
+            typeof response.data.price === 'number'
+              ? response.data.price
+              : numericValue;
+
+          const updatedQuantity =
+            typeof response.data.quantity === 'number'
+              ? response.data.quantity
+              : Math.floor(numericValue);
+
+          return {
+            ...p,
+            ...response.data,
+            price: field === 'price' ? updatedPrice : p.price,
+            quantity: field === 'quantity' ? updatedQuantity : p.quantity,
+          };
+        });
+
+        onProductsChange(updatedProduct);
         toast({
           title: "Actualizado",
           description: response.message,
@@ -140,9 +141,9 @@ export const ProductTable: React.FC = () => {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('es-ES', {
+    return new Intl.NumberFormat('es-MX', {
       style: 'currency',
-      currency: 'EUR'
+      currency: 'MXN'
     }).format(amount);
   };
 
@@ -152,7 +153,7 @@ export const ProductTable: React.FC = () => {
     return { label: 'En stock', variant: 'success' as const, icon: CheckCircle2 };
   };
 
-  if (loading) {
+  if (isLoading) {
     return (
       <Card>
         <CardHeader>
@@ -180,6 +181,22 @@ export const ProductTable: React.FC = () => {
     );
   }
 
+  if (products.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Package className="h-5 w-5" />
+            Gestión de Productos
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-muted-foreground">No se encontraron productos.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -187,7 +204,7 @@ export const ProductTable: React.FC = () => {
           <Package className="h-5 w-5" />
           Gestión de Productos
           <span className="text-sm font-normal text-muted-foreground">
-            ({products.length} productos)
+            ({products.length} productos en esta página)
           </span>
         </CardTitle>
       </CardHeader>
