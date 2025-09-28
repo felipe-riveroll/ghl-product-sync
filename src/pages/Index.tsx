@@ -1,9 +1,10 @@
 import { ProductTable } from '@/components/ProductTable';
-import { Sparkles, BarChart3 } from 'lucide-react';
+import { Sparkles, BarChart3, Search } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Product, PaginationInfo, ProductsSummary } from '@/types/product';
 import { productService } from '@/services/productService';
 import { useToast } from '@/hooks/use-toast';
+import { useDebounce } from '@/hooks/useDebounce';
 
 const Index = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -21,14 +22,29 @@ const Index = () => {
     totalValue: 0,
     totalStock: 0,
   });
+  const [filters, setFilters] = useState({
+    search: '',
+    minPrice: '',
+    maxPrice: '',
+    minQuantity: '',
+    maxQuantity: '',
+  });
   const { toast } = useToast();
+
+  const debouncedSearch = useDebounce(filters.search, 500);
 
   useEffect(() => {
     let isMounted = true;
 
     const fetchProducts = async () => {
       setLoading(true);
-      const response = await productService.getProducts(pagination.page, pagination.limit);
+
+      const currentFilters = {
+        ...filters,
+        search: debouncedSearch,
+      };
+
+      const response = await productService.getProducts(pagination.page, pagination.limit, currentFilters);
 
       if (!isMounted) {
         return;
@@ -37,11 +53,15 @@ const Index = () => {
       if (response.success) {
         const { products: fetchedProducts, pagination: paginationInfo, summary: summaryInfo } =
           response.data;
+
         setProducts(fetchedProducts);
         setPagination((prev) => ({
           ...prev,
           ...paginationInfo,
+          // If total pages is 0, ensure it's 1
+          totalPages: paginationInfo.totalPages > 0 ? paginationInfo.totalPages : 1,
         }));
+        // The summary now comes from the backend and represents the total inventory
         setSummary(summaryInfo);
       } else {
         toast({
@@ -59,7 +79,12 @@ const Index = () => {
     return () => {
       isMounted = false;
     };
-  }, [pagination.page, pagination.limit, toast]);
+  }, [pagination.page, pagination.limit, debouncedSearch, toast, filters.minPrice, filters.maxPrice, filters.minQuantity, filters.maxQuantity]);
+
+  // Reset page to 1 whenever filters change
+  useEffect(() => {
+    setPagination(prev => ({ ...prev, page: 1 }));
+  }, [debouncedSearch, filters.minPrice, filters.maxPrice, filters.minQuantity, filters.maxQuantity, pagination.limit]);
 
   const handlePageChange = (newPage: number) => {
     setPagination((prev) => ({
@@ -74,6 +99,11 @@ const Index = () => {
       limit: newLimit,
       page: 1,
     }));
+  };
+
+  const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFilters(prev => ({ ...prev, [name]: value }));
   };
 
   // Calculate dynamic statistics (based on current page)
@@ -162,24 +192,65 @@ const Index = () => {
             </div>
           </div>
 
-          {/* Pagination Controls */}
-          <div className="flex flex-col sm:flex-row justify-between items-center gap-4 p-4 bg-card rounded-lg border">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Elementos por página:</span>
-              <select 
-                value={pagination.limit} 
-                onChange={(e) => handleLimitChange(Number(e.target.value))}
-                className="px-3 py-2 border border-input bg-background rounded-md text-sm"
-              >
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={200}>200</option>
-                <option value={300}>300</option>
-              </select>
+          {/* Filter and Pagination Controls */}
+          <div className="space-y-4">
+            <div className="p-4 bg-card rounded-lg border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                {/* Search by Name */}
+                <div className="sm:col-span-2 lg:col-span-2">
+                  <label htmlFor="search" className="text-sm font-medium text-muted-foreground">Buscar por nombre</label>
+                  <div className="relative mt-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <input
+                      type="text"
+                      id="search"
+                      name="search"
+                      value={filters.search}
+                      onChange={handleFilterChange}
+                      placeholder="Ej: Collar de corazón"
+                      className="pl-10 pr-4 py-2 w-full border border-input bg-background rounded-md text-sm"
+                    />
+                  </div>
+                </div>
+
+                {/* Filter by Price */}
+                <div className="lg:col-span-1">
+                  <label htmlFor="minPrice" className="text-sm font-medium text-muted-foreground">Precio</label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input type="number" id="minPrice" name="minPrice" value={filters.minPrice} onChange={handleFilterChange} placeholder="Min" className="w-full border-input bg-background rounded-md text-sm p-2"/>
+                    <input type="number" id="maxPrice" name="maxPrice" value={filters.maxPrice} onChange={handleFilterChange} placeholder="Max" className="w-full border-input bg-background rounded-md text-sm p-2"/>
+                  </div>
+                </div>
+
+                {/* Filter by Quantity */}
+                <div className="lg:col-span-1">
+                   <label htmlFor="minQuantity" className="text-sm font-medium text-muted-foreground">Stock</label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input type="number" id="minQuantity" name="minQuantity" value={filters.minQuantity} onChange={handleFilterChange} placeholder="Min" className="w-full border-input bg-background rounded-md text-sm p-2"/>
+                    <input type="number" id="maxQuantity" name="maxQuantity" value={filters.maxQuantity} onChange={handleFilterChange} placeholder="Max" className="w-full border-input bg-background rounded-md text-sm p-2"/>
+                  </div>
+                </div>
+
+                {/* Items per page */}
+                <div className="lg:col-span-1">
+                  <label htmlFor="limit" className="text-sm font-medium text-muted-foreground">Items por página</label>
+                   <select
+                    id="limit"
+                    value={pagination.limit}
+                    onChange={(e) => handleLimitChange(Number(e.target.value))}
+                    className="w-full px-3 py-2 mt-1 border border-input bg-background rounded-md text-sm"
+                  >
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                    <option value={200}>200</option>
+                    <option value={300}>300</option>
+                  </select>
+                </div>
+              </div>
             </div>
-            
-            <div className="flex items-center gap-2">
+
+            <div className="flex justify-center items-center gap-4 p-4 bg-card rounded-lg border">
               <button
                 onClick={() => handlePageChange(pagination.page - 1)}
                 disabled={!pagination.hasPrevious}

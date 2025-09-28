@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { CheckCircle2, XCircle, Package, DollarSign } from 'lucide-react';
+import { ImagePlaceholder } from './ImagePlaceholder';
 
 interface EditingCell {
   productId: string;
@@ -241,12 +242,18 @@ export const ProductTable: React.FC<ProductTableProps> = ({ products, isLoading,
                   >
                     <td className="p-4">
                       <div className="flex items-center gap-4">
-                        <img 
-                          src={product.image} 
-                          alt={product.name}
-                          className="w-16 h-16 object-cover rounded-md border"
-                          loading="lazy"
-                        />
+                        <div className="w-16 h-16 rounded-md border overflow-hidden flex-shrink-0">
+                          {product.image ? (
+                            <img
+                              src={product.image}
+                              alt={product.name}
+                              className="w-full h-full object-cover"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <ImagePlaceholder />
+                          )}
+                        </div>
                         <div>
                           <h3 className="font-medium text-foreground">{product.name}</h3>
                           <p className="text-sm text-muted-foreground">ID: {product.id}</p>
